@@ -156,6 +156,139 @@ result = suite.run(answer, sources)
 assert result.passed, result.reasons
 ```
 
+## How It Works: Write Once, Run Repeatedly
+
+raglint follows a simple workflow:
+
+1. **Write your test suite once** — Customize assertions for your RAG pipeline
+2. **Run repeatedly** — Same tests catch quality drops automatically
+
+### Step 1: Write Your Test Suite
+
+Create pytest tests with assertions tailored to your use case:
+
+```python
+# tests/test_rag_quality.py
+import pytest
+from raglint import grounded, numeric_grounded, no_placeholders
+
+def test_financial_rag_quality():
+    """Test that financial RAG outputs are grounded."""
+    answer, sources = financial_rag("What was Q3 revenue?")
+    
+    assert grounded(answer, sources).passed
+    assert numeric_grounded(answer, sources).passed
+    assert no_placeholders(answer).passed
+
+def test_entity_questions():
+    """Test that entity questions return grounded entities."""
+    answer, sources = rag.ask("Who is the CEO?")
+    assert grounded(answer, sources).passed
+```
+
+### Step 2: Run Repeatedly (Regression Testing)
+
+Run the same tests:
+- **In CI** on every commit
+- **When prompts change** to catch regressions
+- **When models update** to verify quality
+- **Manually** when debugging issues
+
+```bash
+# Run your test suite
+pytest tests/test_rag_quality.py -v
+
+# Same tests, different inputs each time
+# Catches quality drops automatically
+```
+
+Same assertions, different inputs — that's regression testing.
+
+## Working with Different RAG Output Formats
+
+raglint works with common LLM output formats. It automatically extracts text from:
+
+### JSON Format
+
+```python
+# LLM returns JSON
+response = {
+    "answer": "Revenue grew 12% to $450M.",
+    "sources": [
+        {"id": "doc_1", "text": "Q3 2024: Revenue reached $450M, up 12%."},
+        {"id": "doc_2", "text": "Quarterly report shows strong growth."}
+    ]
+}
+
+# raglint extracts text automatically
+result = grounded(response["answer"], response["sources"])
+```
+
+### Dict Format (with metadata)
+
+```python
+# Sources as dicts
+sources = [
+    {"id": "doc_1", "text": "Q3: $450M revenue", "metadata": {"page": 3}},
+    {"text": "Revenue grew 12%"}  # id optional
+]
+
+result = grounded(answer, sources)  # Works with dicts
+```
+
+### String Format
+
+```python
+# Simple string sources
+sources = [
+    "Q3 2024: Revenue reached $450M, up 12%.",
+    "Quarterly report shows strong growth."
+]
+
+result = grounded(answer, sources)  # Works with strings
+```
+
+### Source Objects
+
+```python
+from raglint import Source
+
+# Explicit Source objects
+sources = [
+    Source(id="doc_1", text="Q3: $450M revenue", metadata={"page": 3}),
+    Source(id="doc_2", text="Revenue grew 12%")
+]
+
+result = grounded(answer, sources)
+```
+
+### Common LLM Q/A Formats
+
+raglint extracts text from common patterns:
+
+```python
+# Pattern 1: Separate answer and sources
+answer = "Revenue grew 12% to $450M."
+sources = ["Q3 2024: Revenue reached $450M, up 12%."]
+
+# Pattern 2: Structured response
+response = {
+    "content": "Revenue grew 12% to $450M.",
+    "citations": [{"text": "Q3 2024: Revenue reached $450M, up 12%."}]
+}
+answer = response["content"]
+sources = [c["text"] for c in response["citations"]]
+
+# Pattern 3: With prefixes/markers
+answer = "Answer: Revenue grew 12% to $450M."
+sources = ["Source 1: Q3 2024: Revenue reached $450M, up 12%."]
+# raglint normalizes text, so prefixes don't matter
+
+result = grounded(answer, sources)  # Works with all formats
+```
+
+**Key point:** raglint normalizes text (lowercase, whitespace) before matching, so it works with various formatting conventions.
+
 ## API Reference
 
 ### Functional API
