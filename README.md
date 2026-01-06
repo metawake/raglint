@@ -84,7 +84,7 @@ Think of it like unit tests: they don't prove correctness, but they catch obviou
 ## Installation
 
 ```bash
-pip install raglint
+pip install git+https://github.com/metawake/raglint.git
 ```
 
 Or from source:
@@ -489,7 +489,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install raglint pytest
+      - run: pip install git+https://github.com/metawake/raglint.git pytest
       - run: pytest tests/test_rag_quality.py -v
 ```
 
