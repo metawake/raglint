@@ -62,11 +62,26 @@ class Check(ABC):
 # =============================================================================
 
 # Patterns for extracting potential entities
+# Ordered by specificity (most specific first to avoid partial matches)
 ENTITY_PATTERNS = [
+    # All-caps acronyms (2-6 letters): IBM, NASA, AWS, NVIDIA
+    # Excludes common words: I, A, THE, AND, FOR, etc.
+    r'\b([A-Z]{2,6})\b',
+    
+    # camelCase / PascalCase brand names: openAI, iPhone, PostgreSQL, macOS
+    r'\b([a-z]+[A-Z][a-zA-Z]*)\b',
+    r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b',
+    
+    # Hyphenated names: Jean-Pierre, Hewlett-Packard, Rolls-Royce
+    r'\b([A-Z][a-z]+(?:-[A-Z][a-z]+)+)\b',
+    
     # Capitalized multi-word names: "John Smith", "Acme Corporation"
     r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b',
     
-    # Company suffixes: "Something Inc.", "Something Corp"
+    # Single capitalized word + company suffix: "Apple Inc.", "Google LLC"
+    r'\b([A-Z][a-z]+\s+(?:Inc|Corp|LLC|Ltd|Co|GmbH|AG|PLC|Company|Corporation|Group|Holdings)\.?)\b',
+    
+    # Company suffixes with multi-word: "Acme Solutions Inc."
     r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Inc|Corp|LLC|Ltd|Co|GmbH|AG|PLC)\.?)\b',
     
     # Patterns like "Dr. Name", "Prof. Name", "CEO Name"
@@ -74,19 +89,38 @@ ENTITY_PATTERNS = [
     
     # Year + study/report pattern: "2023 McKinsey Report"
     r'\b(\d{4}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Report|Study|Survey|Analysis))\b',
+    
+    # Single capitalized words in specific contexts (after "at", "from", "by")
+    # This catches: "works at Apple", "from Microsoft", "by Tesla"
+    r'(?:at|from|by|of)\s+([A-Z][a-z]+)\b',
 ]
 
-# Common words to ignore (not entities)
+# Common words/acronyms to ignore (not entities)
 IGNORE_WORDS = {
+    # Articles and pronouns
     'The', 'This', 'That', 'These', 'Those', 'There', 'Here',
     'What', 'When', 'Where', 'Which', 'Who', 'Why', 'How',
+    # Months
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December',
+    # Days
     'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+    # Transitions
     'However', 'Therefore', 'Furthermore', 'Additionally', 'Moreover',
     'According', 'Based', 'Given', 'Despite', 'Although',
     'First', 'Second', 'Third', 'Finally', 'Next', 'Then',
+    # Common business terms (not entities)
     'Revenue', 'Sales', 'Profit', 'Growth', 'Market', 'Company',
+    'Report', 'Analysis', 'Study', 'Survey', 'Data', 'Results',
+    # Common acronyms that aren't entities
+    'CEO', 'CTO', 'CFO', 'COO', 'VP', 'SVP', 'EVP',
+    'Q1', 'Q2', 'Q3', 'Q4', 'YTD', 'YOY', 'MOM', 'QOQ',
+    'US', 'UK', 'EU', 'UN', 'GDP', 'ROI', 'KPI', 'SLA',
+    'API', 'SDK', 'URL', 'HTTP', 'HTTPS', 'JSON', 'XML', 'CSV',
+    'AI', 'ML', 'NLP', 'LLM', 'RAG', 'GPT', 'PDF', 'HTML',
+    'AM', 'PM', 'EST', 'PST', 'UTC', 'GMT',
+    'USD', 'EUR', 'GBP', 'JPY', 'CNY',
+    'Inc', 'Corp', 'LLC', 'Ltd', 'Co', 'PLC',
 }
 
 
@@ -96,6 +130,14 @@ def extract_entities(text: str) -> list[str]:
     
     Uses pattern matching — no ML/NER dependencies.
     Designed for high recall (over-extracts) for verification.
+    
+    Extracts:
+    - Multi-word capitalized names: "John Smith", "Acme Corporation"
+    - Acronyms: "IBM", "NASA", "AWS"
+    - camelCase brands: "openAI", "iPhone", "macOS"
+    - Hyphenated names: "Jean-Pierre", "Hewlett-Packard"
+    - Company names with suffixes: "Apple Inc.", "Google LLC"
+    - Contextual single words: "at Apple", "from Microsoft"
     """
     entities = []
     seen = set()
@@ -105,14 +147,22 @@ def extract_entities(text: str) -> list[str]:
             entity_text = match.group(1) if match.lastindex else match.group(0)
             entity_text = entity_text.strip()
             
-            # Skip short or ignored
-            if len(entity_text) < 3:
+            # Skip very short (likely noise)
+            if len(entity_text) < 2:
                 continue
+            
+            # Skip if it's in our ignore list (case-sensitive for acronyms)
             if entity_text in IGNORE_WORDS:
                 continue
+            
+            # Skip if we've seen this (case-insensitive dedup)
             if entity_text.lower() in seen:
                 continue
             
+            # Skip single letters
+            if len(entity_text) == 1:
+                continue
+                
             seen.add(entity_text.lower())
             entities.append(entity_text)
     
@@ -122,6 +172,77 @@ def extract_entities(text: str) -> list[str]:
 def normalize_text(text: str) -> str:
     """Normalize text for comparison: lowercase, collapse whitespace."""
     return " ".join(text.lower().split())
+
+
+# =============================================================================
+# Fuzzy Matching (stdlib only, no external dependencies)
+# =============================================================================
+
+def fuzzy_match(needle: str, haystack: str, threshold: float = 0.85) -> bool:
+    """
+    Check if needle appears in haystack with fuzzy matching.
+    
+    Uses Python's stdlib difflib.SequenceMatcher — no external dependencies.
+    
+    Args:
+        needle: String to find
+        haystack: String to search in
+        threshold: Minimum similarity ratio (0.0 to 1.0, default 0.85)
+    
+    Returns:
+        True if needle matches any substring of haystack above threshold
+    
+    Example:
+        >>> fuzzy_match("Acme Corp", "Acme Corporation reported...")
+        True  # "Acme Corp" ~ "Acme Corporation" at ~0.86 similarity
+    """
+    from difflib import SequenceMatcher
+    
+    needle_lower = needle.lower()
+    haystack_lower = haystack.lower()
+    
+    # First, try exact substring match (fast path)
+    if needle_lower in haystack_lower:
+        return True
+    
+    # Sliding window fuzzy match
+    # Check against windows of similar length to needle
+    needle_len = len(needle_lower)
+    words = haystack_lower.split()
+    
+    # Try matching against word sequences of similar token count
+    needle_word_count = len(needle_lower.split())
+    
+    for i in range(len(words)):
+        for window_size in range(needle_word_count, needle_word_count + 2):
+            if i + window_size > len(words):
+                continue
+            window = " ".join(words[i:i + window_size])
+            
+            ratio = SequenceMatcher(None, needle_lower, window).ratio()
+            if ratio >= threshold:
+                return True
+    
+    return False
+
+
+def fuzzy_contains(entity: str, text: str, threshold: float = 0.85) -> bool:
+    """
+    Check if entity is contained in text, with optional fuzzy matching.
+    
+    This is the main matching function used by checks.
+    
+    Args:
+        entity: Entity string to find
+        text: Text to search in
+        threshold: If < 1.0, use fuzzy matching. If 1.0, exact match only.
+    """
+    if threshold >= 1.0:
+        # Exact matching (original behavior)
+        return normalize_text(entity) in normalize_text(text)
+    else:
+        # Fuzzy matching
+        return fuzzy_match(entity, text, threshold)
 
 
 # =============================================================================
@@ -136,17 +257,29 @@ class GroundedCheck(Check):
     
     Args:
         threshold: Minimum fraction of entities that must be grounded (default: 0.8)
+        fuzzy: Enable fuzzy matching for entities (default: False)
+        fuzzy_threshold: Similarity threshold for fuzzy matching (default: 0.85)
     
     Example:
         >>> check = GroundedCheck(threshold=0.8)
         >>> result = check.run(sample)
         >>> assert result.passed
+        
+        >>> # With fuzzy matching (catches "Acme Corp" vs "Acme Corporation")
+        >>> check = GroundedCheck(fuzzy=True, fuzzy_threshold=0.85)
     """
     
     name = "grounded"
     
-    def __init__(self, threshold: float = 0.8):
+    def __init__(
+        self, 
+        threshold: float = 0.8, 
+        fuzzy: bool = False,
+        fuzzy_threshold: float = 0.85
+    ):
         self.threshold = threshold
+        self.fuzzy = fuzzy
+        self.fuzzy_threshold = fuzzy_threshold
     
     def run(self, sample: RagSample) -> CheckResult:
         entities = extract_entities(sample.answer)
@@ -156,17 +289,18 @@ class GroundedCheck(Check):
                 passed=True,
                 score=1.0,
                 reasons=["No entities to verify"],
-                evidence={"entities": [], "matched": [], "missing": []},
+                evidence={"entities": [], "matched": [], "missing": [], "fuzzy": self.fuzzy},
                 check_name=self.name,
             )
         
-        combined = normalize_text(sample.combined_sources)
+        combined = sample.combined_sources
+        match_threshold = self.fuzzy_threshold if self.fuzzy else 1.0
         
         matched = []
         missing = []
         
         for entity in entities:
-            if normalize_text(entity) in combined:
+            if fuzzy_contains(entity, combined, match_threshold):
                 matched.append(entity)
             else:
                 missing.append(entity)
@@ -174,11 +308,12 @@ class GroundedCheck(Check):
         coverage = len(matched) / len(entities)
         passed = coverage >= self.threshold
         
+        fuzzy_note = " (fuzzy)" if self.fuzzy else ""
         if passed:
-            reasons = [f"Entity grounding: {coverage:.0%} ({len(matched)}/{len(entities)})"]
+            reasons = [f"Entity grounding{fuzzy_note}: {coverage:.0%} ({len(matched)}/{len(entities)})"]
         else:
             reasons = [
-                f"Entity grounding: {coverage:.0%} < {self.threshold:.0%}",
+                f"Entity grounding{fuzzy_note}: {coverage:.0%} < {self.threshold:.0%}",
                 f"Missing: {', '.join(missing[:3])}" + (f" (+{len(missing)-3} more)" if len(missing) > 3 else ""),
             ]
         
@@ -186,7 +321,13 @@ class GroundedCheck(Check):
             passed=passed,
             score=coverage,
             reasons=reasons,
-            evidence={"matched": matched, "missing": missing, "threshold": self.threshold},
+            evidence={
+                "matched": matched, 
+                "missing": missing, 
+                "threshold": self.threshold,
+                "fuzzy": self.fuzzy,
+                "fuzzy_threshold": self.fuzzy_threshold if self.fuzzy else None,
+            },
             check_name=self.name,
         )
 
@@ -365,12 +506,20 @@ class NoPlaceholdersCheck(Check):
 # Pattern for extracting numbers (integers, decimals, percentages, currency)
 NUMBER_PATTERN = r'''
     (?:
-        \$?\d{1,3}(?:,\d{3})*(?:\.\d+)?[MBK]?  |  # Currency: $450M, $1,234.56
-        \d+(?:\.\d+)?%                          |  # Percentages: 12%, 3.5%
-        \d{1,3}(?:,\d{3})+                      |  # Large numbers: 1,000,000
-        \d+(?:\.\d+)?                              # Plain numbers: 42, 3.14
+        [+-]?\$?\d{1,3}(?:,\d{3})*(?:\.\d+)?[MBKTmkbt]?  |  # Currency: $450M, $1,234.56, -$50
+        [+-]?\d+(?:\.\d+)?%                               |  # Percentages: 12%, 3.5%, +5%
+        [+-]?\d{1,3}(?:,\d{3})+                           |  # Large numbers: 1,000,000
+        [+-]?\d+(?:\.\d+)?                                   # Plain numbers: 42, 3.14, -10
     )
 '''
+
+# Multipliers for suffix normalization
+SUFFIX_MULTIPLIERS = {
+    'k': 1_000,
+    'm': 1_000_000,
+    'b': 1_000_000_000,
+    't': 1_000_000_000_000,
+}
 
 
 def extract_numbers(text: str) -> list[str]:
@@ -379,12 +528,77 @@ def extract_numbers(text: str) -> list[str]:
     return pattern.findall(text)
 
 
-def normalize_number(num_str: str) -> str:
-    """Normalize number for comparison: remove formatting."""
-    # Remove currency symbols and suffixes
-    normalized = num_str.replace('$', '').replace(',', '')
-    # Handle M/B/K suffixes (but keep for matching)
-    return normalized.lower()
+def normalize_number(num_str: str) -> float | None:
+    """
+    Normalize number to a float for comparison.
+    
+    Handles:
+    - Currency symbols: $450 → 450
+    - Commas: 1,234,567 → 1234567
+    - Suffixes: 1.5M → 1500000, 2K → 2000
+    - Percentages: 15% → 0.15
+    - Signs: +12, -5
+    
+    Returns None if parsing fails.
+    """
+    if not num_str:
+        return None
+    
+    # Clean the string
+    s = num_str.strip()
+    
+    # Track if it's a percentage
+    is_percentage = s.endswith('%')
+    
+    # Remove currency symbols and formatting
+    s = s.replace('$', '').replace(',', '').replace('%', '').replace('+', '')
+    
+    # Check for suffix multiplier
+    multiplier = 1
+    if s and s[-1].lower() in SUFFIX_MULTIPLIERS:
+        multiplier = SUFFIX_MULTIPLIERS[s[-1].lower()]
+        s = s[:-1]
+    
+    # Parse the numeric value
+    try:
+        value = float(s)
+    except ValueError:
+        return None
+    
+    # Apply multiplier
+    value *= multiplier
+    
+    # Convert percentage to decimal
+    if is_percentage:
+        value /= 100
+    
+    return value
+
+
+def numbers_match(num1: str, num2: str, tolerance: float = 0.001) -> bool:
+    """
+    Check if two number strings represent the same value.
+    
+    Handles format differences like:
+    - "$1.5M" vs "1,500,000"
+    - "15%" vs "0.15"
+    - "2K" vs "2000"
+    """
+    val1 = normalize_number(num1)
+    val2 = normalize_number(num2)
+    
+    if val1 is None or val2 is None:
+        return False
+    
+    # Handle zero specially
+    if val1 == 0 and val2 == 0:
+        return True
+    
+    # Use relative tolerance for comparison
+    if val1 == 0 or val2 == 0:
+        return abs(val1 - val2) < tolerance
+    
+    return abs(val1 - val2) / max(abs(val1), abs(val2)) < tolerance
 
 
 class NumericGroundingCheck(Check):
@@ -393,9 +607,15 @@ class NumericGroundingCheck(Check):
     
     Catches the most dangerous hallucinations: invented statistics.
     
+    Now with smart normalization:
+    - "$1.5M" matches "1,500,000"
+    - "15%" matches "0.15"
+    - "2K" matches "2000"
+    
     Args:
         threshold: Minimum fraction of numbers that must be grounded (default: 0.8)
         require_any: If True, at least one number must match. If False, missing numbers = fail.
+        tolerance: Relative tolerance for number comparison (default: 0.001 = 0.1%)
     
     Example:
         >>> check = NumericGroundingCheck()
@@ -405,9 +625,15 @@ class NumericGroundingCheck(Check):
     
     name = "numeric_grounded"
     
-    def __init__(self, threshold: float = 0.8, require_any: bool = True):
+    def __init__(
+        self, 
+        threshold: float = 0.8, 
+        require_any: bool = True,
+        tolerance: float = 0.001
+    ):
         self.threshold = threshold
         self.require_any = require_any
+        self.tolerance = tolerance
     
     def run(self, sample: RagSample) -> CheckResult:
         answer_numbers = extract_numbers(sample.answer)
@@ -422,16 +648,21 @@ class NumericGroundingCheck(Check):
             )
         
         source_numbers = extract_numbers(sample.combined_sources)
-        source_normalized = {normalize_number(n) for n in source_numbers}
         
         matched = []
         missing = []
         
-        for num in answer_numbers:
-            if normalize_number(num) in source_normalized:
-                matched.append(num)
+        for ans_num in answer_numbers:
+            found = False
+            for src_num in source_numbers:
+                if numbers_match(ans_num, src_num, self.tolerance):
+                    found = True
+                    break
+            
+            if found:
+                matched.append(ans_num)
             else:
-                missing.append(num)
+                missing.append(ans_num)
         
         # Handle require_any: if at least one matches, that's often OK
         if self.require_any and matched:
@@ -453,7 +684,12 @@ class NumericGroundingCheck(Check):
             passed=passed,
             score=coverage,
             reasons=reasons,
-            evidence={"matched": matched, "missing": missing, "threshold": self.threshold},
+            evidence={
+                "matched": matched, 
+                "missing": missing, 
+                "threshold": self.threshold,
+                "tolerance": self.tolerance,
+            },
             check_name=self.name,
         )
 
@@ -553,15 +789,35 @@ class CheckSuite:
 # Functional API — thin wrappers for pytest
 # =============================================================================
 
-def grounded(answer: str, sources: list, threshold: float = 0.8) -> CheckResult:
+def grounded(
+    answer: str, 
+    sources: list, 
+    threshold: float = 0.8,
+    fuzzy: bool = False,
+    fuzzy_threshold: float = 0.85
+) -> CheckResult:
     """
     Check that entities in the answer are grounded in sources.
     
+    Args:
+        answer: The RAG answer to verify
+        sources: List of source texts (strings, dicts, or Source objects)
+        threshold: Minimum fraction of entities that must be grounded
+        fuzzy: Enable fuzzy matching (catches "Acme Corp" vs "Acme Corporation")
+        fuzzy_threshold: Similarity threshold for fuzzy matching (0.0-1.0)
+    
     Example:
         assert grounded(answer, sources).passed
+        
+        # With fuzzy matching
+        assert grounded(answer, sources, fuzzy=True).passed
     """
     sample = _make_sample(answer, sources)
-    return GroundedCheck(threshold=threshold).run(sample)
+    return GroundedCheck(
+        threshold=threshold, 
+        fuzzy=fuzzy, 
+        fuzzy_threshold=fuzzy_threshold
+    ).run(sample)
 
 
 def cites_sources(answer: str, sources: list, threshold: float = 0.1, ngram_size: int = 3) -> CheckResult:

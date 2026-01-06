@@ -294,11 +294,13 @@ result = grounded(answer, sources)  # Works with all formats
 ### Functional API
 
 ```python
-grounded(answer, sources, threshold=0.8) -> CheckResult
+grounded(answer, sources, threshold=0.8, fuzzy=False, fuzzy_threshold=0.85) -> CheckResult
 cites_sources(answer, sources, threshold=0.1, ngram_size=3) -> CheckResult
 no_placeholders(answer, patterns=None) -> CheckResult
 numeric_grounded(answer, sources, threshold=0.8) -> CheckResult
 ```
+
+**New in v0.3:** `grounded()` now supports `fuzzy=True` for matching entity variations.
 
 ### Data Classes
 
@@ -332,11 +334,15 @@ class CheckResult:
 ### Check Classes
 
 ```python
-GroundedCheck(threshold=0.8)
+GroundedCheck(threshold=0.8, fuzzy=False, fuzzy_threshold=0.85)
 CitesSourcesCheck(threshold=0.1, ngram_size=3)
 NoPlaceholdersCheck(patterns=None)
-NumericGroundingCheck(threshold=0.8, require_any=True)
+NumericGroundingCheck(threshold=0.8, require_any=True, tolerance=0.001)
 ```
+
+**New in v0.3:** 
+- `GroundedCheck` supports fuzzy matching via `fuzzy=True`
+- `NumericGroundingCheck` normalizes numbers (M/B/K suffixes, percentages)
 
 ## Checks in Detail
 
@@ -529,11 +535,43 @@ jobs:
 3. **Composable** — Checks are independent; combine with `CheckSuite` or run individually
 4. **Evidence-first** — Every result explains *why* it passed/failed
 
+## v0.3.0: Improved Detection
+
+### Better Entity Extraction
+
+Now extracts more entity types:
+- **Acronyms:** IBM, NASA, AWS, NVIDIA
+- **camelCase brands:** openAI, iPhone, macOS, PostgreSQL
+- **Hyphenated names:** Jean-Pierre, Hewlett-Packard, Rolls-Royce
+- **Company suffixes:** Apple Inc, Google LLC, Microsoft Corporation
+- **Contextual entities:** "works at Apple", "from Microsoft"
+
+### Smart Number Normalization
+
+Numbers now match across formats:
+```python
+# These all match now:
+assert numbers_match("$1.5M", "1,500,000")  # ✓
+assert numbers_match("15%", "0.15")          # ✓
+assert numbers_match("2K", "2000")           # ✓
+```
+
+### Optional Fuzzy Matching (stdlib only)
+
+Enable fuzzy matching for entity variations:
+```python
+# Without fuzzy: "Acme Corp" vs "Acme Corporation" = FAIL
+# With fuzzy: matches at ~86% similarity = PASS
+result = grounded(answer, sources, fuzzy=True, fuzzy_threshold=0.85)
+```
+
+Uses Python's `difflib.SequenceMatcher` — **zero external dependencies**.
+
 ## Philosophy
 
 ### What We Believe
 
-1. **80% of bad RAG outputs are obviously bad** — hallucinated entities, invented numbers, template patterns
+1. **Most obvious RAG failures are catchable** — hallucinated entities, invented numbers, template patterns
 2. **You don't need LLM to catch obvious problems** — deterministic checks are faster, cheaper, reproducible
 3. **pytest is the right abstraction** — familiar, composable, CI-friendly
 4. **Negative testing works** — "not obviously broken" is valuable even without proving "correct"
@@ -544,6 +582,66 @@ jobs:
 - No truth verification (that's a different problem)
 - No golden answers (invariants only)
 - No "interesting metrics" (pass/fail, not scores for dashboards)
+
+## Extending raglint
+
+### Want More Sophisticated NER?
+
+raglint is intentionally dependency-free, using pattern-based extraction. If you need more sophisticated entity recognition, you can integrate spaCy or other NLP libraries:
+
+```python
+from raglint import Check, CheckResult, RagSample
+
+class SpacyGroundedCheck(Check):
+    """Custom grounded check using spaCy NER."""
+    
+    name = "spacy_grounded"
+    
+    def __init__(self, threshold: float = 0.8):
+        import spacy
+        self.nlp = spacy.load("en_core_web_sm")
+        self.threshold = threshold
+    
+    def run(self, sample: RagSample) -> CheckResult:
+        # Extract entities with spaCy
+        doc = self.nlp(sample.answer)
+        entities = [ent.text for ent in doc.ents]
+        
+        if not entities:
+            return CheckResult(passed=True, reasons=["No entities"], check_name=self.name)
+        
+        combined = sample.combined_sources.lower()
+        matched = [e for e in entities if e.lower() in combined]
+        missing = [e for e in entities if e.lower() not in combined]
+        
+        coverage = len(matched) / len(entities)
+        passed = coverage >= self.threshold
+        
+        return CheckResult(
+            passed=passed,
+            score=coverage,
+            reasons=[f"spaCy grounding: {coverage:.0%}"],
+            evidence={"matched": matched, "missing": missing},
+            check_name=self.name,
+        )
+
+# Usage
+check = SpacyGroundedCheck()
+result = check.run(sample)
+```
+
+**Why we don't include this by default:**
+- Adds 400MB+ dependency (spaCy + model)
+- Non-deterministic across spaCy versions (model updates change behavior)
+- Overkill for obvious cases — "John Smith" doesn't need BERT
+
+**When you might want it:**
+- Domain-specific entities (medical, legal)
+- Non-English languages
+- Higher recall requirements
+- Already using spaCy in your pipeline
+
+**Contributions welcome!** If you build useful extensions, consider opening a PR or sharing them as a separate package.
 
 ## Contributing
 

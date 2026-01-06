@@ -36,9 +36,13 @@ from raglint.core.checks import (
     # Utilities
     extract_entities,
     extract_numbers,
+    normalize_number,
+    numbers_match,
+    fuzzy_match,
+    fuzzy_contains,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"  # Bumped: improved entity extraction, number normalization, fuzzy matching
 
 __all__ = [
     # Core contracts
@@ -61,4 +65,8 @@ __all__ = [
     # Utilities
     "extract_entities",
     "extract_numbers",
+    "normalize_number",
+    "numbers_match",
+    "fuzzy_match",
+    "fuzzy_contains",
 ]
