@@ -54,6 +54,33 @@ def test_rag_pipeline_quality():
 
 **Scope:** raglint is a fast, deterministic quality gate — like ESLint for RAG outputs. It catches obvious issues in milliseconds at zero cost. For deeper semantic analysis, use complementary tools.
 
+## What raglint Catches vs. What It Doesn't
+
+raglint focuses on **obvious failures** — the 80% of bad outputs that are clearly wrong:
+
+| raglint catches | raglint doesn't catch |
+|-----------------|----------------------|
+| ✅ Hallucinated entities ("John Smith" not in sources) | ❌ Semantic correctness (entity is correct but wrong context) |
+| ✅ Invented numbers ("15%" when sources say "12%") | ❌ Subtle hallucinations (paraphrased facts that sound right) |
+| ✅ Template patterns ("TechCorp", "according to experts") | ❌ Source quality (are the sources themselves correct?) |
+| ✅ Broken retrieval (answer unrelated to sources) | ❌ Answer completeness (did it fully answer the question?) |
+| ✅ Not grounded (generic LLM output) | ❌ Factual truth (is "12%" the right number for this context?) |
+
+### Why This Still Matters
+
+Even though raglint doesn't catch everything, it provides **quality bounds**:
+
+- **Lower bound:** If raglint fails, the output is definitely broken (no false negatives on obvious failures)
+- **Upper bound:** If raglint passes, the output is "not obviously broken" (may still have subtle issues)
+
+This is valuable because:
+1. **Catches the most dangerous failures** — hallucinated entities and numbers are the #1 and #2 causes of RAG failures in production
+2. **Zero cost regression detection** — catch quality drops before they reach users
+3. **Complements deeper evaluation** — use raglint for fast checks, LLM-as-judge for critical paths
+4. **Deterministic CI gates** — no flaky tests, no LLM costs, runs in milliseconds
+
+Think of it like unit tests: they don't prove correctness, but they catch obvious bugs before integration testing.
+
 ## Installation
 
 ```bash
