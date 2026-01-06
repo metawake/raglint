@@ -1,0 +1,17 @@
+# Include essentials
+include README.md
+include LICENSE
+
+# Exclude everything else that's not the package
+prune docs
+prune tests
+exclude codealike.json
+exclude requirements.txt
+exclude requirements.lock
+
+# Standard exclusions
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store
+global-exclude *.egg-info
+

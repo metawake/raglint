@@ -1,0 +1,5 @@
+# rag-check dependencies
+# Minimal: no ML, no LLM, just pattern matching
+
+# Development
+pytest>=7.0.0
